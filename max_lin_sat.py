@@ -362,6 +362,12 @@ class MaxLinSat(AbstractMaxLinSat):
         if self.minimum_distance is None:
             self.compute_minimum_distance()
         return self.minimum_distance
+    
+    def get_decoding_radius(self) -> int:
+        if self.minimum_distance is None:
+            self.compute_minimum_distance()
+            return (self.minimum_distance - 1) // 2
+        
 
     def __str__(self) -> str:
         return f"Max-LINSAT instance over {self.field} with {len(self.variables)} varaiables and {len(self.constraints)} constraints"

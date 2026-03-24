@@ -10,6 +10,7 @@ from sage.rings.finite_rings.element_base import FiniteRingElement
 
 from decoders import BenchmarkResult, AbstractDecoder
 
+
 class Dqi:
     def __init__(self, instance, decoder_constructor=None):
         self.instance = instance.to_max_linsat()
@@ -32,6 +33,7 @@ class Dqi:
         rhs_approximation=True,
         n_decoding_samples=500,
         n_interference_samples=10000,
+        w: np.ndarray | None = None,
     ):
         decoder = self.get_decoder()
         radius = decoder.decoding_radius()
@@ -50,21 +52,21 @@ class Dqi:
             and l <= radius
             and self._check_semicircle_law_requirements()
         ):
-            return self.dqi_performance_semicircle_law()
+            return self.semicircle_law_solution_quality()
         elif is_binary:
             if rhs_approximation:
                 return self._dqi_lower_bound_average_v(
-                    l, w=None, n_tries=n_decoding_samples
+                    l, w=w, n_tries=n_decoding_samples
                 )
             else:
                 return self._dqi_estimate_performance_binary(
                     l,
-                    w=None,
+                    w=w,
                     n_benchmark_tries=n_decoding_samples,
                     n_error_combination_tries=n_interference_samples,
                 )
         else:
-            return self._dqi_compute_exact_performance_non_binary(l)
+            return self._dqi_compute_exact_performance_non_binary(l, w=w)
 
     def _check_semicircle_law_requirements(self):
         B = self.instance.get_B()
@@ -80,7 +82,7 @@ class Dqi:
 
         return True
 
-    def dqi_performance_semicircle_law(self):
+    def semicircle_law_solution_quality(self):
         B = self.instance.get_B()
         n = B.ncols()
         m = B.nrows()
@@ -110,8 +112,10 @@ class Dqi:
 
         decoder = self.get_decoder()
         # decoding with zero errors always succeeds
+        # Starting a large errors is avanteagous for some decoders
         epsilon = [0.0] + [
-            decoder.get_benchmarks(l, k, n_tries).epsilon for k in range(1, l + 1)
+            decoder.get_benchmarks(l, k, n_tries).epsilon
+            for k in reversed(range(1, l + 1))
         ]
 
         B = self.instance.get_B()
@@ -123,8 +127,8 @@ class Dqi:
         self,
         l: int,
         w: np.ndarray | None = None,
-        n_benchmark_tries=500,
-        n_error_combination_tries=10000,
+        n_benchmark_tries: int | None = 500,
+        n_error_combination_tries: int = 10000,
     ):
         assert self.instance.field == GF(2) and self.instance.get_r() == 1
 
@@ -138,13 +142,16 @@ class Dqi:
 
         benchmarks = {0: BenchmarkResult([vector(GF(2), [0] * B.nrows())], [], 0)}
         epsilons = [0] * (l + 1)
-        for k in range(1, l + 1):
+        # Starting a large errors is avanteagous for some decoders
+        for k in ggreversed(range(1, l + 1)):
             benchmarks[k] = decoder.get_benchmarks(l, k, n_tries=n_benchmark_tries)
 
         for k, b in benchmarks.items():
             epsilons[k] = b.epsilon
 
-        A_bar = approximate_A_bar(B, v, l, benchmarks, minimum_distance)
+        A_bar = approximate_A_bar(
+            B, v, l, benchmarks, minimum_distance, n_error_combination_tries
+        )
         return _predict_dqi_performance_imperfect_binary(A_bar, m, l, w, epsilons)
 
     def _dqi_compute_exact_performance_non_binary(
@@ -178,7 +185,8 @@ class Dqi:
             0: BenchmarkResult([vector(self.instance.field, [0] * B.nrows())], [], 0)
         }
         epsilons = [0] * (l + 1)
-        for k in range(1, l + 1):
+        # Starting a large errors is avanteagous for some decoders
+        for k in reversed(range(1, l + 1)):
             benchmarks[k] = decoder.get_benchmarks(l, k, n_tries=None)
 
         A = make_A(p, r, m, l)

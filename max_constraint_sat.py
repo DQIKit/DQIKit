@@ -435,6 +435,48 @@ class IntTerms:
     def get_degree(self) -> int:
         return max((sum(t[1] for t in term) for term in self.terms), default=0)
 
+    def to_linearized_constraint(self) -> list[IntConstraint]:
+        if self.is_binary():
+            return self.to_ising()
+        if self.get_degree() <= 1:
+            return self.to_non_binary_linearized_constraint()
+        raise ValueError(
+            f"Non-binary higher-order objective cannot be linearized: {self}"
+        )
+
+    def to_non_binary_linearized_constraint(self) -> list[IntConstraint]:
+        constraints = []
+        constant_offset = 0
+
+        for term, c in self.terms.items():
+            if len(term) == 0:
+                constant_offset += c
+                continue
+            if len(term) > 1 or term[0][1] != 1:
+                raise ValueError(
+                    f"Non-binary higher-order objective cannot be linearized: {self}"
+                )
+            variable = self.variables[term[0][0]]
+
+            if c > 0:
+                constant_offset += variable.lower * c
+            else:
+                constant_offset += variable.upper * c
+
+            for num in range(variable.lower, variable.upper + 1):
+                if c > 0:
+                    weight = c * (num - variable.lower)
+                else:
+                    weight = -c * (variable.upper - num)
+                if weight != 0:
+                    constraints.append((variable == num).with_weight(weight))
+
+        constraints.append(
+            IntConstraint(IntTerms({}, {}), Relation.EQUALS, weight=constant_offset)
+        )
+
+        return constraints
+
     def to_ising(self) -> list[IntConstraint]:
         if not self.is_binary():
             raise ValueError(f"to_ising only supports binary variables: {self}")
@@ -647,13 +689,11 @@ class MaxConstraintSat:
         self.linearized_objectives: list[IntConstraint] | None = None
         self.linearized_equality_constraints: list[IntConstraint] | None = None
 
-    def new_var(
-        self, name: str, lower: int, upper: int
-    ) -> IntVar:
+    def new_var(self, name: str, lower: int, upper: int) -> IntVar:
         var = IntVar(len(self.variables), name, lower, upper)
         self.variables.append(var)
         return var
-    
+
     def new_binary_var(self, name: str) -> IntVar:
         return self.new_var(name, 0, 1)
 
@@ -669,13 +709,15 @@ class MaxConstraintSat:
             constraint = constraint.with_weight(weight)
         self.constraints.append(constraint)
 
-    def add_objective(self, terms: IntTerms, minimize: bool = False, weight: Fraction | int = 1):
+    def add_objective(
+        self, terms: IntTerms, minimize: bool = False, weight: Fraction | int = 1
+    ):
         factor = weight
         if minimize:
             factor *= -1
         if factor != 1:
             terms = terms * weight
-            
+
         self.objectives.append(terms)
 
     def add_boolean_constraint(self, terms: IntTerms, weight: Fraction | int = 1):
@@ -699,14 +741,16 @@ class MaxConstraintSat:
         if self.linearized_objectives is None:
             self.linearized_objectives = []
             for constraint in self.objectives:
-                self.linearized_objectives.extend(constraint.to_ising())
+                self.linearized_objectives.extend(constraint.to_linearized_constraint())
         return self.linearized_objectives
 
     def get_linearized_equality_constraints(self) -> list[IntConstraint]:
         if self.linearized_equality_constraints is None:
             self.linearized_equality_constraints = []
             for constraint in self.equality_constraints:
-                self.linearized_equality_constraints.extend(constraint.to_ising())
+                self.linearized_equality_constraints.extend(
+                    constraint.to_linearized_constraint()
+                )
         return self.linearized_equality_constraints
 
     def compute_field_order(self) -> int:

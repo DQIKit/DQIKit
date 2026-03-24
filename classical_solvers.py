@@ -6,17 +6,17 @@ from simanneal import Annealer
 import random
 
 
-class Solver:
+class AbstractSolver:
     def __init__(self, instance):
         self.instance = instance.to_max_linsat()
         self.solution = None
 
-    def compute_solution(self):
+    def compute_solution(self, instance):
         raise NotImplementedError()
 
     def get_solution(self):
         if self.solution is None:
-            self.solution = self.compute_solution()
+            self.solution = self.compute_solution(self.instance)
         return self.solution
 
     def get_solution_quality(self):
@@ -24,14 +24,13 @@ class Solver:
         return self.instance.evaluate_solution(solution)
 
 
-class OrToolsSolver(Solver):
-    def __init__(self, instance):
+class OrToolsSolver(AbstractSolver):
+    def __init__(self, instance, time_limit=None):
         super().__init__(instance)
         self._is_optimal = None
+        self.time_limit = time_limit
 
-    def compute_solution(self):
-        instance = self.instance
-
+    def compute_solution(self, instance):
         if not instance.field.is_prime_field():
             raise ValueError("This method only supports prime fields")
 
@@ -69,6 +68,8 @@ class OrToolsSolver(Solver):
             model.Maximize(sum([v * w for v, w in zip(satisfied_vars, weights)]))
 
         solver = cp_model.CpSolver()
+        if self.time_limit is not None:
+            solver.parameters.max_time_in_seconds = self.time_limit
         status = solver.Solve(model)
 
         if status in [cp_model.OPTIMAL, cp_model.FEASIBLE]:
@@ -85,19 +86,17 @@ class OrToolsSolver(Solver):
         return self._is_optimal
 
 
-class BruteForceSolver(Solver):
+class BruteForceSolver(AbstractSolver):
     def __init__(self, instance):
         super().__init__(instance)
         self.solution = None
 
-    def compute_solution(self):
-        solutions = itertools.product(
-            list(self.instance.field), repeat=self.instance.get_n()
-        )
+    def compute_solution(self, instance):
+        solutions = itertools.product(list(instance.field), repeat=instance.get_n())
         best_solution = None
         best_solution_value = None
         for solution in solutions:
-            value = self.instance.evaluate_solution(solution)
+            value = instance.evaluate_solution(solution)
             if best_solution_value is None or value > best_solution_value:
                 best_solution_value = value
                 best_solution = solution
@@ -130,7 +129,7 @@ class MaxLinSatAnneal(Annealer):
         pass
 
 
-class SimAnnealSolver(Solver):
+class SimAnnealSolver(AbstractSolver):
     def __init__(
         self,
         instance,
@@ -145,8 +144,8 @@ class SimAnnealSolver(Solver):
         self.Tmin = Tmin
         self.steps = steps
 
-    def compute_solution(self):
-        annealer = MaxLinSatAnneal(self.instance, self.initial_state)
+    def compute_solution(self, instance):
+        annealer = MaxLinSatAnneal(instance, self.initial_state)
         annealer.Tmax = self.Tmax
         annealer.Tmin = self.Tmin
         annealer.steps = self.steps
@@ -154,7 +153,7 @@ class SimAnnealSolver(Solver):
         return annealer.anneal()[0]
 
 
-class PrangeSolver(Solver):
+class PrangeSolver(AbstractSolver):
     def __init__(self, instance):
         super().__init__(instance)
         n = instance.get_n()
@@ -178,19 +177,19 @@ class PrangeSolver(Solver):
             n / m * 1 + (1 - n / m) * len(F_i) / q for F_i in self.instance.get_F()
         )
 
-    def compute_solution(self):
+    def compute_solution(self, instance):
         expected_solution_quality = self.get_expected_solution_quality()
         for _ in range(1000):
-            solution = self.compute_arbitrary_solution()
-            if self.instance.evaluate_solution(solution) >= expected_solution_quality:
+            solution = self.compute_arbitrary_solution(instance)
+            if instance.evaluate_solution(solution) >= expected_solution_quality:
                 return solution
         raise ValueError("Could not find a solution of the expected quality")
 
-    def compute_arbitrary_solution(self):
-        n = self.instance.get_n()
-        m = self.instance.get_m()
-        B = self.instance.get_B()
-        F = self.instance.get_F()
+    def compute_arbitrary_solution(self, instance):
+        n = instance.get_n()
+        m = instance.get_m()
+        B = instance.get_B()
+        F = instance.get_F()
 
         v = [random.choice(list(F_i)) for F_i in F]
 
@@ -203,9 +202,8 @@ class PrangeSolver(Solver):
         selected_rows_set = set(selected_rows)
         B_subset = B[selected_rows, :]
         v_subset = vector(
-            self.instance.field, [v_i for i, v_i in enumerate(v) if i in selected_rows]
+            instance.field, [v_i for i, v_i in enumerate(v) if i in selected_rows]
         )
 
         x = B_subset.solve_right(v_subset)
         return x
-

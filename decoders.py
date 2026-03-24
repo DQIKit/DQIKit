@@ -8,7 +8,10 @@ import scipy as sp
 import numpy as np
 from ldpc import BpDecoder, BpOsdDecoder
 from sage.all import Matrix, GF, codes, vector, codes
-from sage.coding.linear_code import LinearCodeNearestNeighborDecoder
+from sage.coding.linear_code import (
+    LinearCodeNearestNeighborDecoder,
+    LinearCodeSyndromeDecoder,
+)
 from sage.coding.information_set_decoder import LinearCodeInformationSetDecoder
 from sage.coding.grs_code import GRSBerlekampWelchDecoder
 from sage.coding.guruswami_sudan.gs_decoder import GRSGuruswamiSudanDecoder
@@ -43,7 +46,7 @@ def generate_all_errors(field: GF, n: int, k: int) -> Iterator[vector]:
             yield e
 
 
-def generate_errors(field: GF, n: int, k: int, n_tries: int) -> Iterator[vector]:
+def generate_errors(field: GF, n: int, k: int, n_tries: int | None) -> Iterator[vector]:
     els = [e for e in field if e != 0]
 
     n_possible_errors = math.comb(n, k) * len(els) ** k
@@ -83,7 +86,7 @@ class AbstractDecoder:
     def decode(self, message: vector, l: int) -> vector:
         raise NotImplementedError()
 
-    def compute_benchmarks(self, l: int, n_errors: int, n_tries: int):
+    def compute_benchmarks(self, l: int, n_errors: int, n_tries: int | None):
         correct = list()
         incorrect = list()
 
@@ -107,7 +110,7 @@ class AbstractDecoder:
         )
 
     def get_benchmarks(
-        self, l: int, n_errors: int, n_tries: int = 100
+        self, l: int, n_errors: int, n_tries: int | None = 100
     ) -> BenchmarkResult:
         key = (n_errors, n_tries)
         if key not in self.benchmarks:
@@ -127,9 +130,34 @@ class NearestNeighborDecoder(AbstractDecoder):
     def decoding_radius(self) -> int:
         return None
 
-
     def decode(self, message: vector, l: int) -> vector:
         return self.decoder.decode_to_code(message)
+
+
+class SyndromeDecoder(AbstractDecoder):
+    @staticmethod
+    def constructor(**decoder_parameters) -> Callable[["MaxLinSat"], AbstractDecoder]:
+        return lambda instance: SyndromeDecoder(instance, **decoder_parameters)
+
+    def __init__(self, instance: "MaxLinSat"):
+        self.decoders = {}
+
+    def get_decoder(self, l: int) -> LinearCodeSyndromeDecoder:
+        valid_ls = [k for k in self.decoders if k >= l]
+
+        if len(valid_ls) > 0:
+            return self.decoders[min(valid_ls)]
+
+        decoder = LinearCodeSyndromeDecoder(self.instance.get_code(), l)
+        self.decoders[l] = decoder
+        return decoder
+
+    def decoding_radius(self):
+        return None
+
+    def decode(self, message: vector, l: int):
+        decoder = self.get_decoder(l)
+        return decoder.decode_to_code(message)
 
 
 class InformationSetDecoder(AbstractDecoder):
@@ -148,7 +176,7 @@ class InformationSetDecoder(AbstractDecoder):
                 self.instance.get_code(), l, **self.decoder_parameters
             )
         return self.decoders[l]
-    
+
     def decoding_radius(self):
         return None
 
@@ -252,6 +280,7 @@ class GeneralizedReedSolomonDecoder(AbstractDecoder):
         if isinstance(result, list):
             return result[0]
         return result
+
 
 def DEFAULT_DECODER_CONSTRUCTOR(instance):
     if instance.field.order() == 2:
